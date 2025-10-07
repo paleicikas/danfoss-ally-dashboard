@@ -797,6 +797,17 @@
     });
     if (connectBtn) connectBtn.addEventListener('click', async () => {
       try {
+        const idEl = document.getElementById('clientIdInputModal');
+        const secEl = document.getElementById('clientSecretInputModal');
+        const refreshEl = document.getElementById('refreshSecondsInputModal');
+        if (idEl && idEl.value) localStorage.setItem('ally_client_id', idEl.value.trim());
+        if (secEl && secEl.value) localStorage.setItem('ally_client_secret', secEl.value.trim());
+        if (refreshEl && refreshEl.value) {
+          const val = parseInt(refreshEl.value, 10);
+          if (!isNaN(val) && val >= 5 && val <= 3600) {
+            setRefreshSeconds(val);
+          }
+        }
         await getAccessToken(true);
         await loadDevices();
         scheduleAutoRefresh();
