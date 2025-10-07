@@ -236,6 +236,10 @@
               <label class="form-label">Customer Secret</label>
               <input id="clientSecretInputModal" type="password" class="form-control" placeholder="Enter Customer Secret">
             </div>
+            <div class="col-md-12">
+              <label class="form-label">Refresh Interval (seconds)</label>
+              <input id="refreshSecondsInputModal" type="number" class="form-control" placeholder="60" min="5" max="3600">
+            </div>
           </div>
           <div class="form-text mt-2">For internal use. Credentials are stored in this device's browser localStorage.</div>
         </div>
@@ -278,6 +282,19 @@
     const cid = localStorage.getItem('ally_client_id') || '';
     const sec = localStorage.getItem('ally_client_secret') || '';
     return { cid, sec };
+  }
+
+  function getRefreshSeconds() {
+    const stored = localStorage.getItem('ally_refresh_seconds');
+    if (stored) {
+      const val = parseInt(stored, 10);
+      if (!isNaN(val) && val >= 5 && val <= 3600) return val;
+    }
+    return 60;
+  }
+
+  function setRefreshSeconds(seconds) {
+    localStorage.setItem('ally_refresh_seconds', String(seconds));
   }
 
   function loadCredsToUI() {
@@ -678,8 +695,8 @@
     }
   }
 
-  function scheduleAutoRefresh(ms=60000){ const link=document.getElementById('refreshLink'); if (refreshTimeoutId) { clearTimeout(refreshTimeoutId); refreshTimeoutId=null; } nextRefreshAt=Date.now()+ms; const tick=()=>{ const now=Date.now(); const left=Math.max(0, Math.ceil((nextRefreshAt-now)/1000)); if (link) link.textContent = left>0 ? `Refresh now (${left}s)` : 'Refresh now'; if (left<=0){ refreshTimeoutId=setTimeout(async ()=>{ refreshTimeoutId=null; await triggerRefresh(true); }, 0); } else { refreshTimeoutId=setTimeout(tick, 1000); } }; tick(); }
-  async function triggerRefresh(auto=false){ if (isRefreshing) return; isRefreshing=true; try { await getAccessToken(true); await loadDevices(); } finally { isRefreshing=false; scheduleAutoRefresh(60000); } }
+  function scheduleAutoRefresh(ms=null){ const link=document.getElementById('refreshLink'); if (refreshTimeoutId) { clearTimeout(refreshTimeoutId); refreshTimeoutId=null; } const refreshMs = ms !== null ? ms : (getRefreshSeconds() * 1000); nextRefreshAt=Date.now()+refreshMs; const tick=()=>{ const now=Date.now(); const left=Math.max(0, Math.ceil((nextRefreshAt-now)/1000)); if (link) link.textContent = left>0 ? `Refresh now (${left}s)` : 'Refresh now'; if (left<=0){ refreshTimeoutId=setTimeout(async ()=>{ refreshTimeoutId=null; await triggerRefresh(true); }, 0); } else { refreshTimeoutId=setTimeout(tick, 1000); } }; tick(); }
+  async function triggerRefresh(auto=false){ if (isRefreshing) return; isRefreshing=true; try { await getAccessToken(true); await loadDevices(); } finally { isRefreshing=false; scheduleAutoRefresh(); } }
 
   const tempHistory = new Map();
   function addTempSample(deviceId, tempC){ if (tempC==null) return; const key=String(deviceId); const arr=tempHistory.get(key)||[]; arr.push({ t: Date.now(), v: Number(tempC) }); if (arr.length>50) arr.shift(); tempHistory.set(key, arr); drawSparkline(key); }
@@ -720,7 +737,7 @@
     try {
       await getAccessToken(true);
       await loadDevices();
-      scheduleAutoRefresh(60000);
+      scheduleAutoRefresh();
     } catch (e) {
       alert(e.message || String(e));
     }
@@ -731,10 +748,13 @@
   let settingsModal;
   function loadCredsToModal() {
     const { cid, sec } = getStoredCreds();
+    const refreshSec = getRefreshSeconds();
     const idEl = document.getElementById('clientIdInputModal');
     const secEl = document.getElementById('clientSecretInputModal');
+    const refreshEl = document.getElementById('refreshSecondsInputModal');
     if (idEl) idEl.value = cid || '';
     if (secEl) secEl.value = sec || '';
+    if (refreshEl) refreshEl.value = String(refreshSec);
   }
   document.addEventListener('DOMContentLoaded', () => {
     const link = document.getElementById('openSettingsLink');
@@ -752,24 +772,34 @@
     if (saveBtn) saveBtn.addEventListener('click', () => {
       const idEl = document.getElementById('clientIdInputModal');
       const secEl = document.getElementById('clientSecretInputModal');
+      const refreshEl = document.getElementById('refreshSecondsInputModal');
       if (idEl && idEl.value) localStorage.setItem('ally_client_id', idEl.value.trim());
       if (secEl && secEl.value) localStorage.setItem('ally_client_secret', secEl.value.trim());
+      if (refreshEl && refreshEl.value) {
+        const val = parseInt(refreshEl.value, 10);
+        if (!isNaN(val) && val >= 5 && val <= 3600) {
+          setRefreshSeconds(val);
+        }
+      }
       alert('Saved.');
     });
     if (clearBtn) clearBtn.addEventListener('click', () => {
       localStorage.removeItem('ally_client_id');
       localStorage.removeItem('ally_client_secret');
+      localStorage.removeItem('ally_refresh_seconds');
       const idEl = document.getElementById('clientIdInputModal');
       const secEl = document.getElementById('clientSecretInputModal');
+      const refreshEl = document.getElementById('refreshSecondsInputModal');
       if (idEl) idEl.value = '';
       if (secEl) secEl.value = '';
+      if (refreshEl) refreshEl.value = '60';
       alert('Cleared.');
     });
     if (connectBtn) connectBtn.addEventListener('click', async () => {
       try {
         await getAccessToken(true);
         await loadDevices();
-        scheduleAutoRefresh(60000);
+        scheduleAutoRefresh();
         if (settingsModal) settingsModal.hide();
       } catch (e) {
         alert(e.message || String(e));
@@ -779,10 +809,19 @@
 
   (async function init() {
     loadCredsToUI();
+    const { cid, sec } = getStoredCreds();
+    if (!cid || !sec) {
+      setTimeout(() => {
+        if (!settingsModal) settingsModal = new bootstrap.Modal(document.getElementById('settingsModal'));
+        loadCredsToModal();
+        settingsModal.show();
+      }, 500);
+      return;
+    }
     try {
       await getAccessToken(true);
       await loadDevices();
-      scheduleAutoRefresh(60000);
+      scheduleAutoRefresh();
     } catch (e) {}
   })();
 </script>
