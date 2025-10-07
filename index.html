@@ -77,7 +77,7 @@
     .sparkline path { stroke: var(--brand-red); stroke-width: 2; fill: none; opacity: .9; }
     .sparkline .grid { stroke: var(--gray-200); stroke-width: 1; opacity: .7; }
     /* Metrics inline */
-    .metrics-inline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; padding: 0; list-style: none; }
+    .metrics-inline { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; margin-bottom: 0; padding: 0; list-style: none; }
     .metrics-inline .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--gray-300); background: #fff; border-radius: 9999px; padding: 2px 8px; font-size: .78rem; color: #374151; }
     .metrics-inline .label { color: var(--gray-600); }
 
@@ -429,15 +429,30 @@
 
   function parseHumidityFromStatus(status) {
     if (!Array.isArray(status)) return null;
+    // First try to find humidity_value specifically
+    const humidityValueItem = status.find(s => s && String(s.code || '').toLowerCase() === 'humidity_value');
+    if (humidityValueItem && humidityValueItem.value != null) {
+      const raw = humidityValueItem.value;
+      const num = typeof raw === 'number' ? raw : (typeof raw === 'string' ? parseFloat(raw.replace(',', '.')) : NaN);
+      if (!Number.isNaN(num)) {
+        let v = num;
+        // Handle tenth-based values (e.g. 650 -> 65)
+        if (v > 100 && v <= 1000) v = v / 10;
+        if (v > 1000) v = v / 100;
+        if (v >= 0 && v <= 100) return String(Math.round(v));
+      }
+    }
+    // Fallback to any humidity field
     for (const s of status) {
-      if (!s) continue;
+      if (!s || s.value == null) continue;
       const code = String(s.code || '').toLowerCase();
       if (code.includes('humidity') || code.includes('humid')) {
         const raw = s.value;
         const num = typeof raw === 'number' ? raw : (typeof raw === 'string' ? parseFloat(raw.replace(',', '.')) : NaN);
         if (Number.isNaN(num)) continue;
         let v = num;
-        if (v > 1000) v = v / 10; // handle tenth-based values like 650 -> 65.0
+        if (v > 100 && v <= 1000) v = v / 10;
+        if (v > 1000) v = v / 100;
         if (v < 0 || v > 100) continue;
         return String(Math.round(v));
       }
@@ -494,11 +509,15 @@
       const typeHtml = `<div class="device-type">${d.device_type || ''}</div>`;
       let metricsHtml = '';
       if (tempNow != null) metricsHtml += `<div class="mt-2 text-center"><div id="temp-${d.id}" class="temp-value">${tempNow} °C</div><div class="text-muted small">Temperature <span id="tstat-${d.id}" class="status-pill" style="display:none"></span></div><svg class="sparkline mt-2" width="100%" viewBox="0 0 100 36" preserveAspectRatio="none"><path d=""/></svg></div>`;
-      metricsHtml += `<div id="metrics-${d.id}">`;
-      if (humNow != null) metricsHtml += `<div class="mt-1 d-flex justify-content-between"><span class="text-muted small">Humidity</span><strong>${humNow} %</strong></div>`;
-      if (battNow != null) metricsHtml += `<div class="mt-1 d-flex justify-content-between"><span class="text-muted small">Battery</span><strong>${battNow} %</strong></div>`;
-      if (tempSet != null) metricsHtml += `<div class="mt-1 d-flex justify-content-between"><span class="text-muted small">Setpoint</span><strong>${tempSet} °C</strong></div>`;
-      metricsHtml += `</div>`;
+      metricsHtml += `<ul id="metrics-${d.id}" class="metrics-inline">`;
+      if (humNow != null) metricsHtml += `<li class="chip"><span class="label">Humidity:</span> <strong>${humNow}%</strong></li>`;
+      if (battNow != null) {
+        const battVal = parseInt(battNow, 10);
+        const battClass = battVal < 30 ? 'text-danger' : '';
+        metricsHtml += `<li class="chip"><span class="label">Battery:</span> <strong class="${battClass}">${battNow}%</strong></li>`;
+      }
+      if (tempSet != null) metricsHtml += `<li class="chip"><span class="label">Setpoint:</span> <strong>${tempSet}°C</strong></li>`;
+      metricsHtml += `</ul>`;
 
       col.innerHTML = `
         <div class="card card-device h-100 ${typeToBgClass(d.device_type)}" data-id="${d.id}" style="cursor:pointer">
@@ -702,7 +721,7 @@
   function addTempSample(deviceId, tempC){ if (tempC==null) return; const key=String(deviceId); const arr=tempHistory.get(key)||[]; arr.push({ t: Date.now(), v: Number(tempC) }); if (arr.length>50) arr.shift(); tempHistory.set(key, arr); drawSparkline(key); }
   function drawSparkline(deviceId){ const card = document.querySelector(`[data-id="${deviceId}"]`); if (!card) return; const svg = card.querySelector('svg.sparkline path'); if (!svg) return; const arr = tempHistory.get(String(deviceId))||[]; if (!arr.length){ svg.setAttribute('d',''); return; } const values = arr.map(p=>p.v); const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(0.1, max-min); const n = values.length; const pts = values.map((v,i)=>{ const x = (i/(n-1||1))*100; const y = 36 - ((v-min)/span)*36; return `${x},${y}`; }); svg.setAttribute('d', `M ${pts.join(' L ')}`); }
 
-  async function updateMetricsInBackground(list){ const concurrency=4; let idx=0; const workers=Array.from({length:Math.min(concurrency,list.length)},()=> (async function(){ while(idx<list.length){ const i=idx++; const d=list[i]; try{ const res=await apiFetch(`/devices/${encodeURIComponent(d.id)}/status`); if(!res.ok) continue; const s=await res.json(); const st=s.result||[]; const t=parseTempCFromStatus(st); if (t!=null) addTempSample(d.id, t); const h=parseHumidityFromStatus(st); const b=parseBatteryFromStatus(st); const set=getTempSetFromStatus(st); const metrics=document.getElementById(`metrics-${d.id}`); if (metrics){ let html=''; if (h!=null) html+=`<div class=\"mt-1 d-flex justify-content-between\"><span class=\"text-muted small\">Humidity</span><strong>${h} %</strong></div>`; if (b!=null) html+=`<div class=\"mt-1 d-flex justify-content-between\"><span class=\"text-muted small\">Battery</span><strong>${b} %</strong></div>`; if (set!=null) html+=`<div class=\"mt-1 d-flex justify-content-between\"><span class=\"text-muted small\">Setpoint</span><strong id=\"set-${d.id}\">${set} °C</strong></div>`; metrics.innerHTML=html; }
+  async function updateMetricsInBackground(list){ const concurrency=4; let idx=0; const workers=Array.from({length:Math.min(concurrency,list.length)},()=> (async function(){ while(idx<list.length){ const i=idx++; const d=list[i]; try{ const res=await apiFetch(`/devices/${encodeURIComponent(d.id)}/status`); if(!res.ok) continue; const s=await res.json(); const st=s.result||[]; const t=parseTempCFromStatus(st); if (t!=null) addTempSample(d.id, t); const h=parseHumidityFromStatus(st); const b=parseBatteryFromStatus(st); const set=getTempSetFromStatus(st); const metrics=document.getElementById(`metrics-${d.id}`); if (metrics){ let html=''; if (h!=null) html+=`<li class=\"chip\"><span class=\"label\">Humidity:</span> <strong>${h}%</strong></li>`; if (b!=null) { const bVal=parseInt(b,10); const bClass=bVal<30?'text-danger':''; html+=`<li class=\"chip\"><span class=\"label\">Battery:</span> <strong class=\"${bClass}\">${b}%</strong></li>`; } if (set!=null) html+=`<li class=\"chip\"><span class=\"label\">Setpoint:</span> <strong id=\"set-${d.id}\">${set}°C</strong></li>`; metrics.innerHTML=html; }
             // color temperature if below setpoint
             const tempEl=document.getElementById(`temp-${d.id}`);
             const setEl=document.getElementById(`set-${d.id}`);
